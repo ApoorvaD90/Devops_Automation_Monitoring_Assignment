@@ -1,0 +1,114 @@
+---
+- name: Configure Web Server and Deploy MERN Application
+  hosts: webserver
+  become: yes
+  vars:
+    app_dir: /home/ubuntu/TravelMemory
+    db_host: 10.0.2.15
+    db_name: travelmemory
+    db_user: traveluser
+    db_pass: TravelPass123!
+    backend_port: 3000
+    frontend_port: 3001
+  tasks:
+    - name: Update apt packages
+      apt:
+        update_cache: yes
+    - name: Install required packages
+      apt:
+        name:
+          - curl
+          - git
+          - nginx
+        state: present
+    - name: Install Node.js 18.x
+      shell: |
+        curl -fsSL https://deb.nodesource.com/setup_18.x | bash 
+        apt-get install -y nodejs
+      args:
+        creates: /usr/bin/node
+    - name: Verify Node.js installation
+      shell: node --version
+      register: node_version
+    - name: Print Node.js version
+      debug:
+        msg: "Node.js version: {{ node_version.stdout }}"
+    - name: Install PM2 globally
+      npm:
+        name: pm2
+        global: yes
+    - name: Clone TravelMemory repository
+      git:
+        repo: https://github.com/UnpredictablePrashant/TravelMemory.git
+        dest: "{{ app_dir }}"
+        force: yes
+    - name: Install backend dependencies
+      npm:
+        path: "{{ app_dir }}/backend"
+    - name: Create backend .env file
+      copy:
+        dest: "{{ app_dir }}/backend/.env"
+        content: |
+          MONGO_URI=mongodb://{{ db_user }}:{{ db_pass }}@{{ db_host }}:27017/{{ db_name }}
+          PORT={{ backend_port }}
+    - name: Start backend with PM2
+      shell: |
+        cd {{ app_dir }}/backend
+        pm2 delete backend || true
+        pm2 start index.js --name backend
+        pm2 save
+      become_user: ubuntu
+    - name: Install frontend dependencies
+      npm:
+        path: "{{ app_dir }}/frontend"
+    - name: Create frontend .env file
+      copy:
+        dest: "{{ app_dir }}/frontend/.env"
+        content: |
+          REACT_APP_BACKEND_URL=http://{{ ansible_host }}:{{ backend_port }}
+    - name: Build React frontend
+      shell: |
+        cd {{ app_dir }}/frontend
+        npm run build
+      environment:
+        CI: "false"
+    - name: Configure Nginx for frontend
+      copy:
+        dest: /etc/nginx/sites-available/travelmemory
+        content: |
+          server {
+             listen 80;
+             server_name _;
+
+             root {{ app_dir }}/frontend/build;
+             index index.html;
+
+             location / {
+                  try_files $uri $uri/ /index.html;
+             }
+
+             location /api {
+                  proxy_pass http://localhost:{{ backend_port }};
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+             }
+          }
+    - name: Enable Nginx site
+      file:
+        src: /etc/nginx/sites-available/travelmemory
+        dest: /etc/nginx/sites-enabled/travelmemory
+        state: link
+    - name: Remove default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+    - name: Restart Nginx
+      systemd:
+        name: nginx
+        state: restarted
+        enabled: yes
+    - name: Set up PM2 startup
+      shell: pm2 startup | tail -1 | bash
+      ignore_errors: yes

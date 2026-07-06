@@ -1,0 +1,77 @@
+---
+- name: Configure MongoDB Database Server
+  hosts: dbserver
+  become: yes
+  vars:
+    mongo_db_name: travelmemory
+    mongo_username: traveluser
+    mongo_password: TravelPass123!
+  tasks:
+    - name: Update apt packages
+      apt:
+        update_cache: yes
+    - name: Install required packages
+      apt:
+        name:
+          - gnupg
+          - curl
+        state: present
+    - name: Add MongoDB GPG key
+      shell: |
+        curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | \
+        gpg -o /usr/share/keyrings/mongodb-server-7.0.gpg --dearmor
+      args:
+        creates: /usr/share/keyrings/mongodb-server-7.0.gpg
+    - name: Add MongoDB repository
+      shell: |
+        echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] \
+        https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | \
+        tee /etc/apt/sources.list.d/mongodb-org-7.0.list
+    - name: Update apt after adding MongoDB repo
+      apt:
+        update_cache: yes
+    - name: Install MongoDB
+      apt:
+        name: mongodb-org
+        state: present
+    - name: Start and enable MongoDB
+      systemd:
+        name: mongod
+        state: started
+        enabled: yes
+    - name: Wait for MongoDB to start
+      wait_for:
+        port: 27017
+        delay: 5
+        timeout: 30
+    - name: Create MongoDB admin user
+      shell: |
+        mongosh --eval "
+          use admin;
+          db.createUser({
+            user: 'admin',
+            pwd: 'AdminPass123!',
+            roles: ['root']
+          });
+        "
+      ignore_errors: yes
+    - name: Create application database and user
+      shell: |
+        mongosh --eval "
+          use {{ mongo_db_name }};
+          db.createUser({
+            user: '{{ mongo_username }}',
+            pwd: '{{ mongo_password }}',
+            roles: [{ role: 'readWrite', db: '{{ mongo_db_name }}' }]
+          });
+        "
+      ignore_errors: yes
+    - name: Configure MongoDB to bind to all interfaces
+      lineinfile:
+        path: /etc/mongod.conf
+        regexp: '  bindIp:'
+        line: '  bindIp: 0.0.0.0'
+    - name: Restart MongoDB
+      systemd:
+        name: mongod
+        state: restarted

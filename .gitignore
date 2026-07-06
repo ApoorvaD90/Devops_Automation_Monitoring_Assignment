@@ -1,0 +1,11 @@
+# Terraform auto-downloaded provider binaries (regenerate with `terraform init`)
+**/.terraform/
+
+# Terraform state (contains resource IDs/IPs from a specific deployment)
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# SSH private keys
+*.pem
